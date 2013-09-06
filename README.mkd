@@ -16,6 +16,12 @@ gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
     ListenAndServe(":8889", nil)
 ```
 
+## Supported Storage Engine
+
+* SQLite3
+* PostgreSQL
+* MySQL
+
 ## Authors
 
 Yasuhiro Matsumoto
