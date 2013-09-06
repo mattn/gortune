@@ -92,7 +92,7 @@ func (g *Gortune) putResource(name string, id int64, schema Schema, w http.Respo
 	var args []interface{}
 	l := rt.NumField()
 	for i := 0; i < l; i++ {
-		k := rt.Field(i).Name
+		k := strings.ToLower(rt.Field(i).Name)
 		v := nv.Elem().Field(i).Interface()
 		if i == 0 {
 			fields += k + "=" + g.placeHolder(i+1)
@@ -103,7 +103,7 @@ func (g *Gortune) putResource(name string, id int64, schema Schema, w http.Respo
 	}
 	if len(args) > 0 {
 		args = append(args, id)
-		sql := "update " + name + "set " + fields + " where id = " + g.placeHolder(len(args))
+		sql := "update " + name + " set " + fields + " where id = " + g.placeHolder(len(args))
 		_, err := g.db.Exec(sql, args...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -142,7 +142,7 @@ func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter
 	var args []interface{}
 	l := rt.NumField()
 	for i := 0; i < l; i++ {
-		k := rt.Field(i).Name
+		k := strings.ToLower(rt.Field(i).Name)
 		v := nv.Elem().Field(i).Interface()
 		if i == 0 {
 			fs += k
@@ -161,19 +161,23 @@ func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		/*
+		TODO: PostgreSQL doesn't work
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+		*/
+		w.WriteHeader(http.StatusCreated)
+	} else {
+		var jv map[string]interface{}
+		err = json.Unmarshal(b, &jv)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jv["id"] = id
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(jv)
 	}
-
-	var jv map[string]interface{}
-	err = json.Unmarshal(b, &jv)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	jv["id"] = id
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(jv)
 }
 
 func (g *Gortune) deleteResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
@@ -332,7 +336,7 @@ func (g *Gortune) Resource(name string, schema Schema) *Gortune {
 			} else {
 				g.getResource(name, id, schema, w, r)
 			}
-		case "PUT":
+		case "PUT", "POST":
 			g.putResource(name, id, schema, w, r)
 		case "DELETE":
 			g.deleteResource(name, id, schema, w, r)
