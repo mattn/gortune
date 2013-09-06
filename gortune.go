@@ -79,6 +79,9 @@ func (g *Gortune) putResource(name string, id int64, schema Schema, w http.Respo
 		return
 	}
 
+	if schema == nil {
+		schema = make(map[string]interface{})
+	}
 	rt := reflect.TypeOf(schema).Elem()
 	nv := reflect.New(rt)
 	vv := nv.Interface()
@@ -129,6 +132,9 @@ func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter
 		return
 	}
 
+	if schema == nil {
+		schema = make(map[string]interface{})
+	}
 	rt := reflect.TypeOf(schema).Elem()
 	nv := reflect.New(rt)
 	vv := nv.Interface()
@@ -211,6 +217,9 @@ func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter
 		return
 	}
 
+	if schema == nil {
+		schema = make(map[string]interface{})
+	}
 	rt := reflect.TypeOf(schema).Elem()
 
 	values := make([]interface{}, 0)
@@ -268,6 +277,9 @@ func (g *Gortune) getResource(name string, id int64, schema Schema, w http.Respo
 		return
 	}
 
+	if schema == nil {
+		schema = make(map[string]interface{})
+	}
 	rt := reflect.TypeOf(schema).Elem()
 	nv := reflect.New(rt)
 
