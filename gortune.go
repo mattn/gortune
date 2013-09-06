@@ -155,7 +155,7 @@ func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var values []map[string]interface{}
+	values := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var fields []interface{}
 		item := make(map[string]interface{})
