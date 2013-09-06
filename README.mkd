@@ -22,6 +22,10 @@ gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
 * PostgreSQL
 * MySQL
 
+## TODO
+
+* Schema related operations. Type of data? Visible Columns?
+
 ## Authors
 
 Yasuhiro Matsumoto
