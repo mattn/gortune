@@ -20,11 +20,12 @@ const (
 	MongoDB    = "mongodb"
 )
 
-type schemaType int
+type dataType int
 
 const (
-	String schemaType = iota
-	Number
+	String dataType = iota
+	Integer
+	Float
 	DateTime
 )
 
@@ -34,7 +35,7 @@ type Gortune struct {
 	driver string
 }
 
-type Schema map[string]interface{}
+type Schema interface{}
 
 func NewGortune(config Config) (*Gortune, error) {
 	db, err := sql.Open(config.Driver, config.DataSource)

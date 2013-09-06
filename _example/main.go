@@ -1,12 +1,18 @@
 package main
 
 import (
-	"github.com/mattn/gortune"
+	gt "github.com/mattn/gortune"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
-	gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
-		Resource("person", nil).
+	gt.MustNewGortune(
+		gt.Config{
+			Driver: gt.SQLite3,
+			DataSource: "foo.db",
+		}).
+		Resource("person", new(struct {
+			Age int `json:"age"`
+			Name string `json:"name"`})).
 		ListenAndServe(":8889", nil)
 }
