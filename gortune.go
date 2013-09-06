@@ -4,8 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
+	"reflect"
+	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -35,6 +39,10 @@ type Gortune struct {
 	driver string
 }
 
+func Atoi64(s string) (int64, error) {
+	return strconv.ParseInt(s, 10, 64)
+}
+
 type Schema interface{}
 
 func NewGortune(config Config) (*Gortune, error) {
@@ -43,8 +51,8 @@ func NewGortune(config Config) (*Gortune, error) {
 		return nil, err
 	}
 	return &Gortune{
-		mux: http.NewServeMux(),
-		db:  db,
+		mux:    http.NewServeMux(),
+		db:     db,
 		driver: config.Driver,
 	}, nil
 }
@@ -64,69 +72,111 @@ func (g *Gortune) placeHolder(n int) string {
 	return "?"
 }
 
-func (g *Gortune) putResource(name string, id string, schema Schema, w http.ResponseWriter, r *http.Request) {
-	var values map[string]interface{}
-	err := json.NewDecoder(r.Body).Decode(&values)
+func (g *Gortune) putResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
+	b, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var args []interface{}
-	n := 1
+
+	rt := reflect.TypeOf(schema).Elem()
+	nv := reflect.New(rt)
+	vv := nv.Interface()
+
+	err = json.Unmarshal(b, &vv)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	fields := ""
-	for k, v := range values {
-		if n == 1 {
-			fields += k + "=" + g.placeHolder(n)
+	var args []interface{}
+	l := rt.NumField()
+	for i := 0; i < l; i++ {
+		k := rt.Field(i).Name
+		v := nv.Elem().Field(i).Interface()
+		if i == 0 {
+			fields += k + "=" + g.placeHolder(i+1)
 		} else {
-			fields += "," + k + "=" + g.placeHolder(n)
+			fields += "," + k + "=" + g.placeHolder(i+1)
 		}
 		args = append(args, v)
-		n++
 	}
 	if len(args) > 0 {
 		args = append(args, id)
-		sql := "update " + name + "set " + fields + " where id = " + g.placeHolder(n)
-		_, err = g.db.Exec(sql, args...)
+		sql := "update " + name + "set " + fields + " where id = " + g.placeHolder(len(args))
+		_, err := g.db.Exec(sql, args...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		var jv map[string]interface{}
+		err = json.Unmarshal(b, &jv)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jv["id"] = id
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
-	var values map[string]interface{}
-	err := json.NewDecoder(r.Body).Decode(&values)
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	rt := reflect.TypeOf(schema).Elem()
+	nv := reflect.New(rt)
+	vv := nv.Interface()
+
+	err = json.Unmarshal(b, &vv)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	fs, vs := "", ""
 	var args []interface{}
-	n := 1
-	for k, v := range values {
-		if n == 1 {
+	l := rt.NumField()
+	for i := 0; i < l; i++ {
+		k := rt.Field(i).Name
+		v := nv.Elem().Field(i).Interface()
+		if i == 0 {
 			fs += k
-			vs += g.placeHolder(n)
+			vs += g.placeHolder(i + 1)
 		} else {
 			fs += "," + k
-			vs += "," + g.placeHolder(n)
+			vs += "," + g.placeHolder(i+1)
 		}
 		args = append(args, v)
-		n++
 	}
 	sql := "insert into " + name + "(" + fs + ") values(" + vs + ")"
-	fmt.Println(sql)
-	_, err = g.db.Exec(sql, args...)
+	res, err := g.db.Exec(sql, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var jv map[string]interface{}
+	err = json.Unmarshal(b, &jv)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jv["id"] = id
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(jv)
 }
 
-func (g *Gortune) deleteResource(name string, id string, schema Schema, w http.ResponseWriter, r *http.Request) {
+func (g *Gortune) deleteResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
 	res, err := g.db.Exec("delete from "+name+" where id = "+g.placeHolder(1), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -156,25 +206,48 @@ func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	values := make([]map[string]interface{}, 0)
+
+	rt := reflect.TypeOf(schema).Elem()
+
+	values := make([]interface{}, 0)
 	for rows.Next() {
 		var fields []interface{}
-		item := make(map[string]interface{})
+		nv := reflect.New(rt)
 		for _ = range cols {
 			fields = append(fields, new(interface{}))
 		}
 		rows.Scan(fields...)
+
+		var iid interface{}
 		for i, col := range cols {
-			item[col] = fields[i]
+			if col == "id" {
+				iid = fields[i]
+				continue
+			}
+			for f := 0; f < nv.Elem().NumField(); f++ {
+				fn := rt.Field(f).Name
+				if strings.ToLower(fn) == col {
+					nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
+					break
+				}
+			}
 		}
-		values = append(values, item)
+		b, err := json.Marshal(nv.Interface())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var jv map[string]interface{}
+		err = json.Unmarshal(b, &jv)
+		jv["id"] = iid
+		values = append(values, jv)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(values)
 }
 
-func (g *Gortune) getResource(name string, id string, schema Schema, w http.ResponseWriter, r *http.Request) {
+func (g *Gortune) getResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
 	rows, err := g.db.Query("select * from "+name+" where id = "+g.placeHolder(1), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -190,8 +263,11 @@ func (g *Gortune) getResource(name string, id string, schema Schema, w http.Resp
 		http.NotFound(w, r)
 		return
 	}
+
+	rt := reflect.TypeOf(schema).Elem()
+	nv := reflect.New(rt)
+
 	var fields []interface{}
-	item := make(map[string]interface{})
 	for _ = range cols {
 		fields = append(fields, new(interface{}))
 	}
@@ -200,12 +276,31 @@ func (g *Gortune) getResource(name string, id string, schema Schema, w http.Resp
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	var iid interface{}
 	for i, col := range cols {
-		item[col] = fields[i]
+			if col == "id" {
+				iid = fields[i]
+				continue
+			}
+			for f := 0; f < nv.Elem().NumField(); f++ {
+				fn := rt.Field(f).Name
+				if strings.ToLower(fn) == col {
+					nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
+					break
+				}
+			}
 	}
+	b, err := json.Marshal(nv.Interface())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var jv map[string]interface{}
+	err = json.Unmarshal(b, &jv)
+	jv["id"] = iid
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(item)
+	json.NewEncoder(w).Encode(jv)
 }
 
 func (g *Gortune) Resource(name string, schema Schema) *Gortune {
@@ -220,10 +315,19 @@ func (g *Gortune) Resource(name string, schema Schema) *Gortune {
 		}
 	})
 	g.mux.HandleFunc("/"+name+"/", func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Path[len(name)+2:]
+		p := r.URL.Path[len(name)+2:]
+		var id int64
+		var err error
+		if p != "" {
+			id, err = Atoi64(p)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+		}
 		switch r.Method {
 		case "GET":
-			if id == "" {
+			if p == "" {
 				g.listResource(name, schema, w, r)
 			} else {
 				g.getResource(name, id, schema, w, r)
