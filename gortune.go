@@ -3,6 +3,7 @@ package gortune
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 )
@@ -12,16 +13,25 @@ type Config struct {
 	DataSource string
 }
 
+const (
+	SQLite3    = "sqlite3"
+	PostgreSQL = "postgres"
+	MySQL      = "mysql"
+	MongoDB    = "mongodb"
+)
+
 type schemaType int
 
 const (
 	String schemaType = iota
 	Number
+	DateTime
 )
 
 type Gortune struct {
-	Mux *http.ServeMux
-	DB  *sql.DB
+	mux    *http.ServeMux
+	db     *sql.DB
+	driver string
 }
 
 type Schema map[string]interface{}
@@ -32,8 +42,9 @@ func NewGortune(config Config) (*Gortune, error) {
 		return nil, err
 	}
 	return &Gortune{
-		Mux: http.NewServeMux(),
-		DB:  db,
+		mux: http.NewServeMux(),
+		db:  db,
+		driver: config.Driver,
 	}, nil
 }
 
@@ -45,56 +56,68 @@ func MustNewGortune(config Config) *Gortune {
 	return g
 }
 
-func (g *Gortune) putResource(name string, id string, values map[string]interface{}, w http.ResponseWriter, r *http.Request) {
+func (g *Gortune) placeHolder(n int) string {
+	if g.driver == PostgreSQL {
+		return fmt.Sprintf("$%d", n)
+	}
+	return "?"
+}
+
+func (g *Gortune) putResource(name string, id string, schema Schema, w http.ResponseWriter, r *http.Request) {
+	var values map[string]interface{}
 	err := json.NewDecoder(r.Body).Decode(&values)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	first := true
-	fields := ""
 	var args []interface{}
+	n := 1
+	fields := ""
 	for k, v := range values {
-		if first {
-			first = false
-			fields += k + "=?"
+		if n == 1 {
+			fields += k + "=" + g.placeHolder(n)
 		} else {
-			fields += "," + k + "=?"
+			fields += "," + k + "=" + g.placeHolder(n)
 		}
 		args = append(args, v)
+		n++
 	}
-	args = append(args, id)
-	sql := "update " + name + "set " + fields + " where id = ?"
-	_, err = g.DB.Exec(sql, args...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if len(args) > 0 {
+		args = append(args, id)
+		sql := "update " + name + "set " + fields + " where id = " + g.placeHolder(n)
+		_, err = g.db.Exec(sql, args...)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (g *Gortune) postResource(name string, values map[string]interface{}, w http.ResponseWriter, r *http.Request) {
+func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
+	var values map[string]interface{}
 	err := json.NewDecoder(r.Body).Decode(&values)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	first := true
 	fs, vs := "", ""
 	var args []interface{}
+	n := 1
 	for k, v := range values {
-		if first {
-			first = false
+		if n == 1 {
 			fs += k
-			vs += "?"
+			vs += g.placeHolder(n)
 		} else {
 			fs += "," + k
-			vs += ",?"
+			vs += "," + g.placeHolder(n)
 		}
 		args = append(args, v)
+		n++
 	}
-	sql := "insert into " + name + "(" + fs + ") vs(" + vs + ")"
-	_, err = g.DB.Exec(sql, args...)
+	sql := "insert into " + name + "(" + fs + ") values(" + vs + ")"
+	fmt.Println(sql)
+	_, err = g.db.Exec(sql, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -102,8 +125,8 @@ func (g *Gortune) postResource(name string, values map[string]interface{}, w htt
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (g *Gortune) deleteResource(name string, id string, w http.ResponseWriter, r *http.Request) {
-	res, err := g.DB.Exec("delete from "+name+" where id = ?", id)
+func (g *Gortune) deleteResource(name string, id string, schema Schema, w http.ResponseWriter, r *http.Request) {
+	res, err := g.db.Exec("delete from "+name+" where id = "+g.placeHolder(1), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -120,8 +143,8 @@ func (g *Gortune) deleteResource(name string, id string, w http.ResponseWriter, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (g *Gortune) listResource(name string, w http.ResponseWriter, r *http.Request) {
-	rows, err := g.DB.Query("select * from " + name)
+func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
+	rows, err := g.db.Query("select * from " + name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -150,8 +173,8 @@ func (g *Gortune) listResource(name string, w http.ResponseWriter, r *http.Reque
 	json.NewEncoder(w).Encode(values)
 }
 
-func (g *Gortune) getResource(name string, id string, w http.ResponseWriter, r *http.Request) {
-	rows, err := g.DB.Query("select * from "+name+" where id = ?", id)
+func (g *Gortune) getResource(name string, id string, schema Schema, w http.ResponseWriter, r *http.Request) {
+	rows, err := g.db.Query("select * from "+name+" where id = "+g.placeHolder(1), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -185,29 +208,29 @@ func (g *Gortune) getResource(name string, id string, w http.ResponseWriter, r *
 }
 
 func (g *Gortune) Resource(name string, schema Schema) *Gortune {
-	g.Mux.HandleFunc("/"+name+"", func(w http.ResponseWriter, r *http.Request) {
+	g.mux.HandleFunc("/"+name+"", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
-			g.listResource(name, w, r)
+			g.listResource(name, schema, w, r)
 		case "POST":
 			g.postResource(name, schema, w, r)
 		default:
 			http.NotFound(w, r)
 		}
 	})
-	g.Mux.HandleFunc("/"+name+"/", func(w http.ResponseWriter, r *http.Request) {
+	g.mux.HandleFunc("/"+name+"/", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Path[len(name)+2:]
 		switch r.Method {
 		case "GET":
 			if id == "" {
-				g.listResource(name, w, r)
+				g.listResource(name, schema, w, r)
 			} else {
-				g.getResource(name, id, w, r)
+				g.getResource(name, id, schema, w, r)
 			}
 		case "PUT":
 			g.putResource(name, id, schema, w, r)
 		case "DELETE":
-			g.deleteResource(name, id, w, r)
+			g.deleteResource(name, id, schema, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -216,7 +239,7 @@ func (g *Gortune) Resource(name string, schema Schema) *Gortune {
 }
 
 func (g *Gortune) Serve(l net.Listener, handler http.Handler) error {
-	return http.Serve(l, g.Mux)
+	return http.Serve(l, g.mux)
 }
 
 func (g *Gortune) ListenAndServe(addr string, handler http.Handler) error {
@@ -224,5 +247,5 @@ func (g *Gortune) ListenAndServe(addr string, handler http.Handler) error {
 	if err != nil {
 		return err
 	}
-	return http.Serve(l, g.Mux)
+	return http.Serve(l, g.mux)
 }
