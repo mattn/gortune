@@ -10,9 +10,11 @@ http://thechangelog.com/fortune-js-prototype-json-apis/
 
 ## Usage
 
-	gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
-		Resource("person", nil).
-		ListenAndServe(":8889", nil)
+```go
+gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
+    Resource("person", nil).
+    ListenAndServe(":8889", nil)
+```
 
 ## Authors
 
