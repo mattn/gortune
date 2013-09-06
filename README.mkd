@@ -24,7 +24,7 @@ gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
 
 ## TODO
 
-* Schema related operations. Type of data? Visible Columns?
+* Scan field names via field tag: ``gortune:"XXX"`` ?
 
 ## Authors
 
