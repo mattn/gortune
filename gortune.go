@@ -215,6 +215,10 @@ func (g *Gortune) Resource(name string, schema Schema) *Gortune {
 	return g
 }
 
+func (g *Gortune) Serve(l net.Listener, handler http.Handler) error {
+	return http.Serve(l, g.Mux)
+}
+
 func (g *Gortune) ListenAndServe(addr string, handler http.Handler) error {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
