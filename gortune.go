@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"labix.org/v2/mgo"
 	"net"
 	"net/http"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 type Config struct {
 	Driver     string
 	DataSource string
+	Database   string
 }
 
 const (
@@ -36,6 +38,7 @@ const (
 type Gortune struct {
 	mux    *http.ServeMux
 	db     *sql.DB
+	mongo  *mgo.Database
 	driver string
 }
 
@@ -46,15 +49,25 @@ func Atoi64(s string) (int64, error) {
 type Schema interface{}
 
 func NewGortune(config Config) (*Gortune, error) {
-	db, err := sql.Open(config.Driver, config.DataSource)
+	g := &Gortune{
+		mux:    http.NewServeMux(),
+		driver: config.Driver,
+	}
+	var err error
+	if config.Driver == MongoDB {
+		var session *mgo.Session
+		session, err = mgo.Dial(config.DataSource)
+		if err != nil {
+			return nil, err
+		}
+		g.mongo = session.DB(config.Database)
+	} else {
+		g.db, err = sql.Open(config.Driver, config.DataSource)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &Gortune{
-		mux:    http.NewServeMux(),
-		db:     db,
-		driver: config.Driver,
-	}, nil
+	return g, nil
 }
 
 func MustNewGortune(config Config) *Gortune {
@@ -129,66 +142,10 @@ func (g *Gortune) putResource(name string, id int64, schema Schema, w http.Respo
 }
 
 func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
-	b, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if schema == nil {
-		schema = make(map[string]interface{})
-	}
-	rt := reflect.TypeOf(schema).Elem()
-	nv := reflect.New(rt)
-	vv := nv.Interface()
-
-	err = json.Unmarshal(b, &vv)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	fs, vs := "", ""
-	var args []interface{}
-	l := rt.NumField()
-	for i := 0; i < l; i++ {
-		k := rt.Field(i).Tag.Get("json")
-		if k == "" {
-			k = strings.ToLower(rt.Field(i).Name)
-		}
-		v := nv.Elem().Field(i).Interface()
-		if i == 0 {
-			fs += k
-			vs += g.placeHolder(i + 1)
-		} else {
-			fs += "," + k
-			vs += "," + g.placeHolder(i+1)
-		}
-		args = append(args, v)
-	}
-	sql := "insert into " + name + "(" + fs + ") values(" + vs + ")"
-	res, err := g.db.Exec(sql, args...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		/*
-			TODO: PostgreSQL doesn't work
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		*/
-		w.WriteHeader(http.StatusCreated)
+	if g.driver == MongoDB {
+		g.postMongo(name, schema, w, r)
 	} else {
-		var jv map[string]interface{}
-		err = json.Unmarshal(b, &jv)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		jv["id"] = id
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(jv)
+		g.postDatabase(name, schema, w, r)
 	}
 }
 
