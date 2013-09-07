@@ -2,9 +2,7 @@ package gortune
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"labix.org/v2/mgo"
 	"net"
 	"net/http"
@@ -86,59 +84,11 @@ func (g *Gortune) placeHolder(n int) string {
 }
 
 func (g *Gortune) putResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
-	b, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if g.driver == MongoDB {
+		g.putMongo(name, id, schema, w, r)
+	} else {
+		g.putDatabase(name, id, schema, w, r)
 	}
-
-	if schema == nil {
-		schema = make(map[string]interface{})
-	}
-	rt := reflect.TypeOf(schema).Elem()
-	nv := reflect.New(rt)
-	vv := nv.Interface()
-
-	err = json.Unmarshal(b, &vv)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	fields := ""
-	var args []interface{}
-	l := rt.NumField()
-	for i := 0; i < l; i++ {
-		k := rt.Field(i).Tag.Get("json")
-		if k == "" {
-			k = strings.ToLower(rt.Field(i).Name)
-		}
-		v := nv.Elem().Field(i).Interface()
-		if i == 0 {
-			fields += k + "=" + g.placeHolder(i+1)
-		} else {
-			fields += "," + k + "=" + g.placeHolder(i+1)
-		}
-		args = append(args, v)
-	}
-	if len(args) > 0 {
-		args = append(args, id)
-		sql := "update " + name + " set " + fields + " where id = " + g.placeHolder(len(args))
-		_, err := g.db.Exec(sql, args...)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var jv map[string]interface{}
-		err = json.Unmarshal(b, &jv)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		jv["id"] = id
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
@@ -150,83 +100,25 @@ func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter
 }
 
 func (g *Gortune) deleteResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
-	res, err := g.db.Exec("delete from "+name+" where id = "+g.placeHolder(1), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if g.driver == MongoDB {
+		g.deleteMongo(name, id, schema, w, r)
+	} else {
+		g.deleteDatabase(name, id, schema, w, r)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if n == 0 {
-		http.NotFound(w, r)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
-	rows, err := g.db.Query("select * from " + name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if g.driver == MongoDB {
+		g.listMongo(name, schema, w, r)
+	} else {
+		g.listDatabase(name, schema, w, r)
 	}
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if schema == nil {
-		schema = make(map[string]interface{})
-	}
-	rt := reflect.TypeOf(schema).Elem()
-
-	values := make([]interface{}, 0)
-	for rows.Next() {
-		var fields []interface{}
-		nv := reflect.New(rt)
-		for _ = range cols {
-			fields = append(fields, new(interface{}))
-		}
-		rows.Scan(fields...)
-
-		var iid interface{}
-		for i, col := range cols {
-			if col == "id" {
-				iid = fields[i]
-				continue
-			}
-			for f := 0; f < nv.Elem().NumField(); f++ {
-				fn := strings.ToLower(rt.Field(i).Name)
-				if fn == "" {
-					fn = rt.Field(f).Name
-				}
-				if strings.ToLower(fn) == col {
-					nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
-					break
-				}
-			}
-		}
-		b, err := json.Marshal(nv.Interface())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var jv map[string]interface{}
-		err = json.Unmarshal(b, &jv)
-		jv["id"] = iid
-		values = append(values, jv)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(values)
 }
 
 func (g *Gortune) createTable(name string, schema Schema) error {
+	if g.driver == MongoDB {
+		return nil
+	}
 	sql := "select count(*) from " + name
 	_, err := g.db.Exec(sql)
 	if err == nil {
@@ -274,65 +166,11 @@ func (g *Gortune) createTable(name string, schema Schema) error {
 }
 
 func (g *Gortune) getResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
-	rows, err := g.db.Query("select * from "+name+" where id = "+g.placeHolder(1), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if g.driver == MongoDB {
+		g.getMongo(name, id, schema, w, r)
+	} else {
+		g.getDatabase(name, id, schema, w, r)
 	}
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !rows.Next() {
-		http.NotFound(w, r)
-		return
-	}
-
-	if schema == nil {
-		schema = make(map[string]interface{})
-	}
-	rt := reflect.TypeOf(schema).Elem()
-	nv := reflect.New(rt)
-
-	var fields []interface{}
-	for _ = range cols {
-		fields = append(fields, new(interface{}))
-	}
-	err = rows.Scan(fields...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	var iid interface{}
-	for i, col := range cols {
-		if col == "id" {
-			iid = fields[i]
-			continue
-		}
-		for f := 0; f < nv.Elem().NumField(); f++ {
-			fn := strings.ToLower(rt.Field(i).Name)
-			if fn == "" {
-				fn = rt.Field(f).Name
-			}
-			if strings.ToLower(fn) == col {
-				nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
-				break
-			}
-		}
-	}
-	b, err := json.Marshal(nv.Interface())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	var jv map[string]interface{}
-	err = json.Unmarshal(b, &jv)
-	jv["id"] = iid
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(jv)
 }
 
 func (g *Gortune) Resource(name string, schema Schema) *Gortune {
