@@ -12,7 +12,11 @@ http://thechangelog.com/fortune-js-prototype-json-apis/
 
 ```go
 gortune.MustNewGortune(gortune.Config{Driver: "sqlite3", DataSource: "foo.db"}).
-    Resource("person", nil).
+    Resource("person", new(
+    struct {
+    	Age  int    `json:"age"`
+    	Name string `json:"name"`
+    })).
     ListenAndServe(":8889", nil)
 ```
 
