@@ -81,7 +81,12 @@ func (g *Gortune) getMongo(name string, id int64, schema Schema, w http.Response
 
 func (g *Gortune) listMongo(name string, schema Schema, w http.ResponseWriter, r *http.Request) {
 	values := make([]interface{}, 0)
-	g.mongo.C(name).Find(values)
+	iter := g.mongo.C(name).Find(nil).Iter()
+
+	var value interface{}
+	for iter.Next(&value) {
+		values = append(values, value)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(values)
