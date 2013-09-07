@@ -95,7 +95,10 @@ func (g *Gortune) putResource(name string, id int64, schema Schema, w http.Respo
 	var args []interface{}
 	l := rt.NumField()
 	for i := 0; i < l; i++ {
-		k := strings.ToLower(rt.Field(i).Name)
+		k := rt.Field(i).Tag.Get("json")
+		if k == "" {
+			k = strings.ToLower(rt.Field(i).Name)
+		}
 		v := nv.Elem().Field(i).Interface()
 		if i == 0 {
 			fields += k + "=" + g.placeHolder(i+1)
@@ -148,7 +151,10 @@ func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter
 	var args []interface{}
 	l := rt.NumField()
 	for i := 0; i < l; i++ {
-		k := strings.ToLower(rt.Field(i).Name)
+		k := rt.Field(i).Tag.Get("json")
+		if k == "" {
+			k = strings.ToLower(rt.Field(i).Name)
+		}
 		v := nv.Elem().Field(i).Interface()
 		if i == 0 {
 			fs += k
@@ -168,9 +174,9 @@ func (g *Gortune) postResource(name string, schema Schema, w http.ResponseWriter
 	id, err := res.LastInsertId()
 	if err != nil {
 		/*
-		TODO: PostgreSQL doesn't work
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+			TODO: PostgreSQL doesn't work
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		*/
 		w.WriteHeader(http.StatusCreated)
 	} else {
@@ -238,7 +244,10 @@ func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter
 				continue
 			}
 			for f := 0; f < nv.Elem().NumField(); f++ {
-				fn := rt.Field(f).Name
+				fn := strings.ToLower(rt.Field(i).Name)
+				if fn == "" {
+					fn = rt.Field(f).Name
+				}
 				if strings.ToLower(fn) == col {
 					nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
 					break
@@ -258,6 +267,53 @@ func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(values)
+}
+
+func (g *Gortune) createTable(name string, schema Schema) error {
+	sql := "select count(*) from " + name
+	_, err := g.db.Exec(sql)
+	if err == nil {
+		return nil
+	}
+
+	rt := reflect.TypeOf(schema).Elem()
+	l := rt.NumField()
+
+	sql = "create table " + name + "(id integer primary key"
+	for i := 0; i < l; i++ {
+		k := rt.Field(i).Tag.Get("json")
+		if k == "" {
+			k = strings.ToLower(rt.Field(i).Name)
+		}
+		sql += "," + k + " "
+
+		typ := "text"
+		switch rt.Field(i).Type.Kind() {
+		case reflect.Bool:
+			typ = "boolean"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
+			typ = "integer"
+		case reflect.Int64:
+			typ = "bigint"
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+			typ = "unsigned integer"
+		case reflect.Uint64:
+			typ = "unsigned bigint"
+		case reflect.Float32:
+			typ = "float"
+		case reflect.Float64:
+			typ = "double"
+		case reflect.String:
+			typ = "text"
+		default:
+			typ = "text"
+		}
+		sql += typ
+	}
+	sql += ")"
+	println(sql)
+	_, err = g.db.Exec(sql)
+	return err
 }
 
 func (g *Gortune) getResource(name string, id int64, schema Schema, w http.ResponseWriter, r *http.Request) {
@@ -294,17 +350,20 @@ func (g *Gortune) getResource(name string, id int64, schema Schema, w http.Respo
 	}
 	var iid interface{}
 	for i, col := range cols {
-			if col == "id" {
-				iid = fields[i]
-				continue
+		if col == "id" {
+			iid = fields[i]
+			continue
+		}
+		for f := 0; f < nv.Elem().NumField(); f++ {
+			fn := strings.ToLower(rt.Field(i).Name)
+			if fn == "" {
+				fn = rt.Field(f).Name
 			}
-			for f := 0; f < nv.Elem().NumField(); f++ {
-				fn := rt.Field(f).Name
-				if strings.ToLower(fn) == col {
-					nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
-					break
-				}
+			if strings.ToLower(fn) == col {
+				nv.Elem().Field(f).Set(reflect.ValueOf(fields[i]).Elem().Elem().Convert(rt.Field(f).Type))
+				break
 			}
+		}
 	}
 	b, err := json.Marshal(nv.Interface())
 	if err != nil {
@@ -356,6 +415,7 @@ func (g *Gortune) Resource(name string, schema Schema) *Gortune {
 			http.NotFound(w, r)
 		}
 	})
+	g.createTable(name, schema)
 	return g
 }
 
