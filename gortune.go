@@ -81,7 +81,10 @@ func (g *Gortune) putResource(name string, id int64, schema Schema, w http.Respo
 	if schema == nil {
 		schema = make(map[string]interface{})
 	}
-	rt := reflect.TypeOf(schema).Elem()
+	rt := reflect.TypeOf(schema)
+	if rt.Kind() == reflect.Ptr {
+		rt = rt.Elem()
+	}
 	nv := reflect.New(rt)
 	vv := nv.Interface()
 
@@ -243,7 +246,7 @@ func (g *Gortune) listResource(name string, schema Schema, w http.ResponseWriter
 				continue
 			}
 			for f := 0; f < nv.Elem().NumField(); f++ {
-				fn := strings.ToLower(rt.Field(i).Name)
+				fn := strings.ToLower(rt.Field(f).Name)
 				if fn == "" {
 					fn = rt.Field(f).Name
 				}
