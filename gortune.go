@@ -21,7 +21,6 @@ const (
 	SQLite3    = "sqlite3"
 	PostgreSQL = "postgres"
 	MySQL      = "mysql"
-	MongoDB    = "mongodb"
 )
 
 type dataType int
